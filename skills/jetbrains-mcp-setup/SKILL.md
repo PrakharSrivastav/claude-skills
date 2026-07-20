@@ -106,9 +106,10 @@ authoritative stdio config — try the script, fall back to the manual button:
 ```bash
 scripts/02-make-stdio-config.sh /tmp/ij-mcp.json   # auto: reconstructs the exact command/classpath/env
 ```
-It pins the known-good jar set (one plugin jar + a fixed set of platform libs — **not** a glob)
-and **verifies every jar exists**; on any drift (IDE version bump moved/renamed a jar) it FAILs
-and points you at the manual path below. Manual is always correct:
+It is **layout-aware**, keyed on the runner jar name: 2026.2+ (`mcpserver.jar`) uses a
+`plugins/mcpserver/lib/*:lib/*` glob; ≤2026.1 (`mcpserver-frontend.jar`) uses the fixed curated
+platform-lib set and **verifies every jar exists**. If neither runner jar is present (deeper
+layout drift) it FAILs and points you at the manual path below. Manual is always correct:
 
 > **Fallback / manual:** Settings → **Tools → MCP Server** → **Copy Stdio Config** (not SSE),
 > then `pbpaste > /tmp/ij-mcp.json`.

@@ -4,12 +4,12 @@
 # the skill can be automated.
 #
 # It reconstructs the exact command/classpath/env the bundled mcpserver stdio
-# runner needs. The classpath is a FIXED, curated list (one plugin jar + a
-# specific set of platform libs), captured from a known-good config — NOT a glob,
-# because the dir holds jars the runner must NOT be on the classpath. If the IDE
-# layout drifts (any listed jar missing), the script does NOT guess: it FAILS and
-# tells you to use the manual Copy-Stdio-Config button. Manual is the always-
-# correct fallback; this is only the fast path.
+# runner needs. Classpath is layout-aware, keyed on the runner jar name:
+#   2026.2+   mcpserver.jar          -> `plugins/mcpserver/lib/*:lib/*` glob
+#   <=2026.1  mcpserver-frontend.jar -> fixed curated platform-lib list
+# If neither runner jar is present (deeper layout drift), the script does NOT
+# guess: it FAILS and tells you to use the manual Copy-Stdio-Config button.
+# Manual is the always-correct fallback; this is only the fast path.
 #
 # Usage: 02-make-stdio-config.sh [out.json]      (default: /tmp/ij-mcp.json)
 # Env:   IDE_APP             override IDE .app path
@@ -53,28 +53,48 @@ fi
 java="$app/Contents/jbr/Contents/Home/bin/java"
 [ -x "$java" ] || fallback "bundled JBR java not found at $java"
 
-# --- classpath: FIXED curated set (from a known-good Copy-Stdio-Config) -------
-# Exactly these, in this order. Verified to exist; a miss means the IDE layout
-# changed (version bump) and the manual button is authoritative again.
-rel_jars=(
-  "plugins/mcpserver/lib/mcpserver-frontend.jar"
-  "lib/util-8.jar"
-  "lib/intellij.libraries.kotlinx.coroutines.core.jar"
-  "lib/intellij.libraries.ktor.client.cio.jar"
-  "lib/intellij.libraries.ktor.client.jar"
-  "lib/intellij.libraries.ktor.network.tls.jar"
-  "lib/intellij.libraries.ktor.io.jar"
-  "lib/intellij.libraries.ktor.utils.jar"
-  "lib/intellij.libraries.kotlinx.io.jar"
-  "lib/intellij.libraries.kotlinx.serialization.core.jar"
-  "lib/intellij.libraries.kotlinx.serialization.json.jar"
-)
-cp=""
-for rel in "${rel_jars[@]}"; do
-  jar="$app/Contents/$rel"
-  [ -f "$jar" ] || fallback "expected jar missing: $rel (IDE layout drifted -> use manual copy)"
-  cp="${cp:+$cp:}$jar"
-done
+# --- classpath: layout-aware (IDE version bumps rename/relocate jars) ----------
+# Two known layouts, distinguished by the mcpserver runner jar name:
+#   2026.2+   plugins/mcpserver/lib/mcpserver.jar          (ktor/kotlinx bundled
+#             in-plugin; curated platform-lib list no longer resolves)
+#   <=2026.1  plugins/mcpserver/lib/mcpserver-frontend.jar (needs curated
+#             platform libs from Contents/lib)
+# New layout uses a `dir/*` glob classpath (java expands it; extra jars are inert
+# and it was verified to launch + list tools). Old layout keeps the curated list
+# it was known-good with. Neither jar present -> real drift -> manual button.
+plugin_lib="$app/Contents/plugins/mcpserver/lib"
+[ -d "$plugin_lib" ] || fallback "mcpserver plugin dir missing: $plugin_lib (MCP Server plugin disabled/absent -> enable it, or use manual copy)"
+
+if [ -f "$plugin_lib/mcpserver.jar" ]; then
+  # 2026.2+ : glob the plugin lib + platform lib. Literal `*` — java expands it,
+  # NOT the shell (kept verbatim in the emitted JSON args).
+  cp="$app/Contents/plugins/mcpserver/lib/*:$app/Contents/lib/*"
+  layout="glob (2026.2+)"
+elif [ -f "$plugin_lib/mcpserver-frontend.jar" ]; then
+  # <=2026.1 : curated fixed set, exact order, each verified present.
+  rel_jars=(
+    "plugins/mcpserver/lib/mcpserver-frontend.jar"
+    "lib/util-8.jar"
+    "lib/intellij.libraries.kotlinx.coroutines.core.jar"
+    "lib/intellij.libraries.ktor.client.cio.jar"
+    "lib/intellij.libraries.ktor.client.jar"
+    "lib/intellij.libraries.ktor.network.tls.jar"
+    "lib/intellij.libraries.ktor.io.jar"
+    "lib/intellij.libraries.ktor.utils.jar"
+    "lib/intellij.libraries.kotlinx.io.jar"
+    "lib/intellij.libraries.kotlinx.serialization.core.jar"
+    "lib/intellij.libraries.kotlinx.serialization.json.jar"
+  )
+  cp=""
+  for rel in "${rel_jars[@]}"; do
+    jar="$app/Contents/$rel"
+    [ -f "$jar" ] || fallback "expected jar missing: $rel (IDE layout drifted -> use manual copy)"
+    cp="${cp:+$cp:}$jar"
+  done
+  layout="curated (<=2026.1, ${#rel_jars[@]} jars)"
+else
+  fallback "no mcpserver runner jar (mcpserver.jar / mcpserver-frontend.jar) in $plugin_lib (IDE layout drifted -> use manual copy)"
+fi
 
 port="${IJ_MCP_SERVER_PORT:-64342}"
 runner="com.intellij.mcpserver.stdio.McpStdioRunnerKt"
@@ -90,6 +110,6 @@ open(out, "w").write(json.dumps(cfg))
 PY
 
 python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$out" || fallback "generated JSON is invalid"
-logf OK "generated $out (port $port, ${#rel_jars[@]} jars)"
-echo "Wrote $out (port $port, ${#rel_jars[@]} jars on classpath)."
+logf OK "generated $out (port $port, classpath: $layout)"
+echo "Wrote $out (port $port, classpath: $layout)."
 echo "Next: scripts/03-setup-mcp.sh <repo-dir> $out"
